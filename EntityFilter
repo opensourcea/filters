@@ -1,0 +1,151 @@
+package com.example.filters;
+
+import java.math.BigDecimal;
+import java.text.MessageFormat;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class EntityFilter {
+    public String getField() {
+        return field;
+    }
+
+    public Operation getOperation() {
+        return operation;
+    }
+
+    public Object getValue() {
+        return value;
+    }
+
+    public Type getType() {
+        return type;
+    }
+
+    public static final String FILTER_ELEMENT_SEPARATOR = ";";
+    private static final String FILTER_PATTERN = "{0};{1};{2};{3}";
+    private static final String IN_VALUES_SEPARATOR = "~";
+    private final String field;
+    private final Operation operation;
+    private final Object value;
+    private final Type type;
+
+    /**
+     * @param rawFilter String complying with pattern: "_field_;_operation_;_value_[;_type_]"
+     */
+    public EntityFilter(String rawFilter) {
+        String[] elements = rawFilter.split(FILTER_ELEMENT_SEPARATOR);
+        if (elements.length < 3) {
+            throw new IllegalArgumentException("Invalid filter: " + rawFilter);
+        }
+        this.field = elements[0];
+        this.operation = Operation.valueOf(elements[1].toUpperCase());
+        if (4 == elements.length) {
+            this.type = Type.valueOf(elements[3].toUpperCase());
+            this.value = castValue(elements[2], this.type);
+        } else {
+            this.type = Type.STRING;
+            this.value = operation.equals(Operation.IN) ? elements[2].split(IN_VALUES_SEPARATOR) : elements[2];
+        }
+    }
+
+    /**
+     * @param field field name
+     * @param operation {@link Operation}
+     * @param value filter value as String
+     * @param type defaults to {@link Type#STRING}
+     * @return filter as String for given parameters
+     */
+    public static String rawFilter(String field, Operation operation, String value, Type type) {
+        type = null != type ? type : Type.STRING;
+        return MessageFormat.format(FILTER_PATTERN, field, operation.name(), value, type.name());
+    }
+
+    /**
+     * Parse a list of raw filters (String representations of entity filters)
+     * @param rawFilters
+     * @return
+     */
+    public static List<EntityFilter> parseFilters(List<String> rawFilters) {
+        return rawFilters.stream().map(EntityFilter::new).collect(Collectors.toList());
+    }
+
+    private Object castValue(String val, Type type) {
+        Object result = null;
+        if (type.equals(Type.STRING)) {
+            result = operation.equals(Operation.IN) ? val.split(IN_VALUES_SEPARATOR) : val;
+        } else if (type.equals(Type.BOOL)) {
+            result = operation.equals(Operation.IN) ? Arrays.stream(val.split(IN_VALUES_SEPARATOR)).map(Boolean::valueOf).toArray() : Boolean.valueOf(val);
+        } else if (type.equals(Type.DATE)) {
+            result = operation.equals(Operation.IN) ? Arrays.stream(val.split(IN_VALUES_SEPARATOR)).map(LocalDate::parse).toArray() : LocalDate.parse(val);
+        } else if (type.equals(Type.DATETIME)) {
+            result = operation.equals(Operation.IN) ? Arrays.stream(val.split(IN_VALUES_SEPARATOR)).map(LocalDateTime::parse).toArray() : LocalDateTime.parse(val);
+        } else if (type.equals(Type.INT)) {
+            result = operation.equals(Operation.IN) ? Arrays.stream(val.split(IN_VALUES_SEPARATOR)).map(Long::valueOf).toArray() : Long.valueOf(val);
+        } else if (type.equals(Type.FLOAT)) {
+            result = operation.equals(Operation.IN) ? Arrays.stream(val.split(IN_VALUES_SEPARATOR)).map(BigDecimal::new).toArray() : new BigDecimal(val);
+        }
+        else {
+            throw new IllegalArgumentException("Invalid type: " + type);
+        }
+        return result;
+    }
+
+    public enum Type {
+        STRING(""),
+        BOOL,
+        DATE("Format YYYY-MM-dd"),
+        DATETIME("Format YYYY-MM-ddThh:mm:ss"),
+        INT,
+        FLOAT;
+
+        Type(String description) {
+            this.description = description;
+        }
+
+        Type() {
+        }
+
+        private String description;
+        @Override
+        public String toString() {
+            if (null != this.description) {
+                return this.name() + "(" + this.description + ")";
+            }
+            return this.name();
+        }
+    }
+
+    public enum Operation {
+        EQ, // equals
+        GT, // greater than
+        GE, // greater than or equals
+        LT, // less than
+        LE, // less than or equals
+        LK, // like
+        IN, // in
+        SEARCH; // search
+    }
+
+    /**
+     * @return Markdown documentation text for OpenAPI or similar formats
+     */
+    public static String documentation() {
+        return "One or more filters with following format: `field;operation;value[;type]`" +
+                System.lineSeparator() + System.lineSeparator() +
+                "- *Type* defaults to `STRING` and is one of: `" + Arrays.toString(Type.values()) + "`" +
+                System.lineSeparator() + System.lineSeparator() +
+                "- *Operation* is one of: `" + Arrays.toString(Operation.values()) + "`" +
+                System.lineSeparator() + System.lineSeparator() +
+                "- If using `" + Operation.IN.name() + "` operation, multiple values can be separated with a `~`" +
+                System.lineSeparator() + System.lineSeparator() +
+                "Examples:" + System.lineSeparator() +
+                "- `name;EQ;John;STRING`" + System.lineSeparator() + System.lineSeparator() +
+                "- `birthday;LT;2022-01-01;DATE`" + System.lineSeparator() + System.lineSeparator() +
+                "- `amount;LE;5302.25;FLOAT`" + System.lineSeparator() + System.lineSeparator() +
+                "- `shape;IN;circle~square~triangle;STRING`";
+    }
+}
