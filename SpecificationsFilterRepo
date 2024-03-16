@@ -1,0 +1,119 @@
+public interface SpecificationFiltersRepo<T> extends JpaSpecificationExecutor<T> {
+    default Specification<T> applyFilters(List<String> rawFilters) {
+        return (entity, query, criteriaBuilder) -> {
+            if (ObjectUtils.isEmpty(rawFilters) || rawFilters.isEmpty()) {
+                return null;
+            }
+
+            List<EntityFilter> filters = EntityFilter.parseFilters(rawFilters);
+            List<Predicate> andPredicates = filters.stream().map(filter -> {
+                switch (filter.getOperation()) {
+                    case EQ:
+                        return isEqual(entity, criteriaBuilder, filter);
+                    case GT:
+                        return greatherThan(entity, criteriaBuilder, filter);
+                    case GE:
+                        return greterThanOrEquals(entity, criteriaBuilder, filter);
+                    case LT:
+                        return lessThan(entity, criteriaBuilder, filter);
+                    case LE:
+                        return lessThanOrEquals(entity, criteriaBuilder, filter);
+                    case LK:
+                        return like(entity, criteriaBuilder, filter);
+                    case IN:
+                        return in(entity, filter);
+                    default:
+                        return null;
+                }
+            }).filter(Objects::nonNull).collect(Collectors.toCollection(ArrayList::new));
+
+            Predicate[] searchPredicates = filters.stream().map(filter -> {
+                if (EntityFilter.Operation.SEARCH.equals(filter.getOperation())) {
+                    return like(entity, criteriaBuilder, filter);
+                }
+                return null;
+            }).filter(Objects::nonNull).toArray(Predicate[]::new);
+
+            if (searchPredicates.length > 0) {
+                andPredicates.add(criteriaBuilder.or(searchPredicates));
+            }
+            return criteriaBuilder.and(andPredicates.toArray(Predicate[]::new));
+        };
+    }
+
+    private Predicate isEqual(Root<T> entity, CriteriaBuilder criteriaBuilder, EntityFilter filter) {
+        Expression<?> expr = entity.get(filter.getField());
+        Object val = filter.getValue();
+        if (expr.getJavaType().isEnum()) {
+            Expression<? extends Enum> enumExpr = entity.get(filter.getField());
+            val = buildEnum(filter, enumExpr.getJavaType());
+        }
+        return criteriaBuilder.equal(expr, val);
+    }
+
+    private Predicate in(Root<T> entity, EntityFilter filter) {
+        Expression<?> expr = entity.get(filter.getField());
+        Object[] val = (Object[]) filter.getValue();
+        if (expr.getJavaType().isEnum()) {
+            Expression<? extends Enum> enumExpr = entity.get(filter.getField());
+            return expr.in(buildEnums(filter, enumExpr.getJavaType()));
+        }
+        return expr.in(val);
+    }
+
+    private Predicate like(Root<T> entity, CriteriaBuilder criteriaBuilder, EntityFilter filter) {
+        if (!EntityFilter.Type.STRING.equals(filter.getType())) {
+            throw new IllegalArgumentException("Only string type supported for like. Field: " + filter.getField());
+        }
+        Expression<String> field = criteriaBuilder.upper(entity.get(filter.getField()));
+        String val = (filter.getValue().toString()).toUpperCase();
+        return criteriaBuilder.like(field, "%" + val + "%");
+    }
+
+    private Predicate greatherThan(Root<T> entity, CriteriaBuilder criteriaBuilder, EntityFilter filter) {
+        Path<? extends Comparable> expr = entity.get(filter.getField());
+        return criteriaBuilder.greaterThan(expr, (Comparable) tryFormatValue(entity, filter));
+    }
+
+    private Predicate greterThanOrEquals(Root<T> entity, CriteriaBuilder criteriaBuilder, EntityFilter filter) {
+        Path<? extends Comparable> expr = entity.get(filter.getField());
+        return criteriaBuilder.greaterThanOrEqualTo(expr, (Comparable) tryFormatValue(entity, filter));
+    }
+
+    private Predicate lessThan(Root<T> entity, CriteriaBuilder criteriaBuilder, EntityFilter filter) {
+        Path<? extends Comparable> expr = entity.get(filter.getField());
+        return criteriaBuilder.lessThan(expr, (Comparable) tryFormatValue(entity, filter));
+    }
+
+    private Predicate lessThanOrEquals(Root<T> entity, CriteriaBuilder criteriaBuilder, EntityFilter filter) {
+        Path<? extends Comparable> expr = entity.get(filter.getField());
+        return criteriaBuilder.lessThanOrEqualTo(expr, (Comparable) tryFormatValue(entity, filter));
+    }
+
+    private Object tryFormatValue(Root<T> entity, EntityFilter filter) {
+        Path<?> expr = entity.get(filter.getField());
+        if (expr.getJavaType().equals(LocalDateTime.class) && filter.getValue() instanceof LocalDate) {
+            return ((LocalDate) filter.getValue()).atStartOfDay();
+        }
+        if (expr.getJavaType().equals(LocalDate.class) && filter.getValue() instanceof LocalDateTime) {
+            return ((LocalDateTime) filter.getValue()).toLocalDate();
+        }
+        return filter.getValue();
+    }
+
+    private Enum<?> buildEnum(EntityFilter filter, Class<? extends Enum> enumType) {
+        return Arrays.stream(enumType.getEnumConstants())
+                .filter(e -> e.name().equalsIgnoreCase(filter.getValue().toString()))
+                .findFirst()
+                .orElseThrow(() -> {
+                    String error ="Enum of type [" + enumType.getSimpleName() + "] not found for: " + filter.getValue();
+                    return new IllegalArgumentException(error);
+                });
+    }
+
+    private List<? extends Enum> buildEnums(EntityFilter filter, Class<? extends Enum> enumType) {
+        Object[] values = (Object[]) filter.getValue();
+        return Arrays.stream(enumType.getEnumConstants())
+                .filter(e -> Arrays.stream(values).anyMatch(value -> e.name().equals(value.toString()))).toList();
+    }
+}
